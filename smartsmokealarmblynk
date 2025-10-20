@@ -1,0 +1,207 @@
+/*
+  ==========================================================
+  🔥 PROJECT: IoT Fire Detection System with Arduino Uno R4 WiFi
+  ==========================================================
+  🧠 Description:
+  This project monitors temperature, humidity, and smoke levels
+  using a DHT11 sensor and an MQ2 gas sensor. The readings are
+  displayed on a 16x2 I2C LCD and sent to the Blynk IoT platform
+  for remote monitoring via a smartphone.
+
+  When the temperature or smoke level exceeds a set threshold,
+  the system:
+   - Activates a buzzer alarm
+   - Sends a notification through the Blynk app
+
+  💡 Components Used:
+   - Arduino Uno R4 WiFi
+   - DHT11 (Temperature & Humidity Sensor)
+   - MQ2 (Smoke/Gas Sensor)
+   - Buzzer
+   - I2C LCD Display (16x2)
+   - Wi-Fi network
+   - Blynk IoT Mobile App
+
+  📡 Blynk Dashboard:
+   - V0 → Temperature (°C)
+   - V1 → Humidity (%)
+   - V2 → Smoke (%)
+   - Event Name → "notification"
+
+  🧾 Features:
+   - Real-time monitoring via LCD & Blynk
+   - Alerts for high temperature or smoke
+   - Prevents repeated notifications
+   - Works with Arduino Uno R4 WiFi (WiFiS3 Library)
+
+  ==========================================================
+*/
+
+#define BLYNK_TEMPLATE_ID "TMPL6UB_6fs6s"
+#define BLYNK_TEMPLATE_NAME "IoT forest detection"
+#define BLYNK_AUTH_TOKEN "qUNX9dP2NztSa0OEz1eMQljKCx-Hiksb"
+
+char ssid[] = "SMART";         // WiFi name (SSID)
+char pass[] = "smart@1234";    // WiFi password
+
+#define BLYNK_PRINT Serial
+
+#include <WiFiS3.h>            // For Arduino Uno R4 WiFi
+#include <BlynkSimpleWifi.h>    // Blynk WiFi library
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>  // LCD library
+#include <DHT.h>                // DHT sensor library
+
+// --- Pin Definitions ---
+const int DHT_PIN = 2;          // DHT11 data pin
+const int MQ2_PIN = A1;         // MQ2 analog output pin
+const int BUZZER_PIN = 11;      // Buzzer pin
+
+// --- Sensor & LCD Setup ---
+LiquidCrystal_I2C lcd(0x27, 16, 2);  // LCD address (0x27) with 16x2 display
+#define DHTTYPE DHT11
+DHT dht(DHT_PIN, DHTTYPE);
+
+BlynkTimer timer; // Blynk timer for periodic updates
+
+// --- Global Variables ---
+float temperature = 0;
+float humidity = 0;
+int smokeValue = 0;
+int smokePercentage = 0;
+
+// --- Threshold Values ---
+const int SMOKE_PERCENT_THRESHOLD = 40; // % threshold for smoke
+const float TEMP_THRESHOLD = 40.0;      // °C threshold for temperature
+
+// --- Notification Flags (to prevent spam alerts) ---
+bool tempNotifSent = false;
+bool smokeNotifSent = false;
+
+// ==========================================================
+// 📊 Function: sendSensorData()
+// Reads sensors, updates LCD & Blynk, and triggers alerts
+// ==========================================================
+void sendSensorData() {
+  // Read DHT11 sensor
+  humidity = dht.readHumidity();
+  temperature = dht.readTemperature();
+
+  // If reading fails, show error
+  if (isnan(humidity) || isnan(temperature)) {
+    Serial.println("Failed to read from DHT sensor!");
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("DHT Error!");
+    return;
+  }
+
+  // Read smoke level from MQ2 sensor (0–1023 → 0–100%)
+  smokeValue = analogRead(MQ2_PIN);
+  smokePercentage = map(smokeValue, 0, 1023, 0, 100);
+
+  // --- Send data to Blynk app ---
+  Blynk.virtualWrite(V0, temperature);
+  Blynk.virtualWrite(V1, humidity);
+  Blynk.virtualWrite(V2, smokePercentage);
+
+  // --- Display readings on LCD ---
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("T:");
+  lcd.print(temperature, 1);
+  lcd.print("C ");
+  lcd.print("H:");
+  lcd.print(humidity, 1);
+  lcd.print("%");
+
+  lcd.setCursor(0, 1);
+  lcd.print("Smoke:");
+  lcd.print(smokePercentage);
+  lcd.print("%");
+
+  // --- Temperature Alert ---
+  if (temperature > TEMP_THRESHOLD) {
+    if (!tempNotifSent) {  // Only send once until back to normal
+      digitalWrite(BUZZER_PIN, HIGH);
+      Blynk.logEvent("notification", String("🔥 High Temp: ") + temperature + " °C");
+      tempNotifSent = true;
+    }
+  } else {
+    tempNotifSent = false; // Reset when back to normal
+    if (!smokeNotifSent) digitalWrite(BUZZER_PIN, LOW);
+  }
+
+  // --- Smoke Alert ---
+  if (smokePercentage > SMOKE_PERCENT_THRESHOLD) {
+    if (!smokeNotifSent) {
+      digitalWrite(BUZZER_PIN, HIGH);
+      Blynk.logEvent("notification", String("💨 Smoke Level High: ") + smokePercentage + "%");
+      smokeNotifSent = true;
+    }
+  } else {
+    smokeNotifSent = false; // Reset when back to normal
+    if (!tempNotifSent) digitalWrite(BUZZER_PIN, LOW);
+  }
+}
+
+// ==========================================================
+// ⚙️ Setup Function
+// Initializes LCD, WiFi, Blynk, and sensors
+// ==========================================================
+void setup() {
+  Serial.begin(9600);
+  delay(10);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  // Initialize LCD
+  Wire.begin();
+  lcd.init();
+  lcd.backlight();
+  lcd.setCursor(0, 0);
+  lcd.print("IoT Sensor Hub");
+  lcd.setCursor(0, 1);
+  lcd.print("Starting...");
+
+  // Start DHT sensor
+  dht.begin();
+  delay(2000);
+
+  // Connect to WiFi
+  lcd.clear();
+  lcd.print("Connecting WiFi");
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+  WiFi.begin(ssid, pass);
+
+  // Wait until connected
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\nConnected to WiFi!");
+  lcd.clear();
+  lcd.print("WiFi Connected!");
+  delay(1000);
+
+  // Connect to Blynk
+  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+  lcd.clear();
+  lcd.print("Blynk Ready!");
+  delay(1000);
+
+  // Send data every 5 seconds
+  timer.setInterval(5000L, sendSensorData);
+}
+
+// ==========================================================
+// 🔁 Main Loop
+// Runs Blynk and periodic sensor updates
+// ==========================================================
+void loop() {
+  Blynk.run();   // Keeps Blynk connected
+  timer.run();   // Runs the sendSensorData() function every 5s
+}
